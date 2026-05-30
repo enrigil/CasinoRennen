@@ -1,0 +1,444 @@
+import { useState, useEffect, useRef, FormEvent } from 'react';
+import { Trophy, Play, Plus, Coins, Users, RotateCcw, Info } from 'lucide-react';
+
+// --- Types ---
+export interface Horse {
+  id: string;
+  name: string;
+  odds: number;
+  position: number;
+}
+
+export interface Player {
+  id: string;
+  name: string;
+  horse: Horse;
+  bet: number;
+}
+
+export type RaceState = 'betting' | 'racing' | 'finished';
+
+// --- Helper Functions ---
+const HORSE_NAMES = ['Blitz', 'Tornado', 'Phantom', 'Sturmwind', 'Meteorit'];
+
+const generateHorses = (): Horse[] => {
+  return HORSE_NAMES.map((name, i) => ({
+    id: `horse-${i}-${Date.now()}`,
+    name,
+    odds: parseFloat((Math.random() * (10.0 - 1.5) + 1.5).toFixed(2)),
+    position: 0,
+  }));
+};
+
+// --- Sub-Components ---
+
+// 2. Das Rennen (Animation)
+function RaceTrack({
+  horses,
+  onFinish,
+}: {
+  horses: Horse[];
+  onFinish: (winnerId: string) => void;
+}) {
+  const [liveHorses, setLiveHorses] = useState<Horse[]>(horses);
+  const requestRef = useRef<number>(null);
+  const isFinished = useRef(false);
+
+  // Generiere zufällige, aber konstante Basis-Geschwindigkeiten pro Pferd,
+  // um Varianz und Spannung zu erhalten (manche sind grundlegend schneller)
+  const baseSpeeds = useRef(horses.map(() => Math.random() * 0.15 + 0.1));
+
+  useEffect(() => {
+    const animate = () => {
+      if (isFinished.current) return;
+
+      setLiveHorses((prev) => {
+        let winnerId: string | null = null;
+        
+        const nextState = prev.map((h, i) => {
+          // Basis-Geschwindigkeit + zufälliger "Jitter" für dynamische Aufholjagden
+          const jitter = Math.random() * 0.15;
+          const moveAmount = baseSpeeds.current[i] + jitter;
+          const newPos = h.position + moveAmount;
+
+          // Ziellinie ist bei ca. 85% der Container-Breite (Start bei 5%, Ende bei 90%)
+          if (newPos >= 85 && !winnerId) {
+            winnerId = h.id;
+          }
+          
+          return { ...h, position: newPos };
+        });
+
+        if (winnerId) {
+          isFinished.current = true;
+          onFinish(winnerId);
+        }
+
+        return nextState;
+      });
+
+      if (!isFinished.current) {
+        // Fix for standard `setTimeout` combined with TS types (requestRef expects number but TS environment might mismatch sometimes, though standard dom types handle this fine)
+        requestRef.current = requestAnimationFrame(animate);
+      }
+    };
+
+    requestRef.current = requestAnimationFrame(animate);
+
+    return () => {
+      if (requestRef.current) {
+        cancelAnimationFrame(requestRef.current);
+      }
+    };
+  }, [onFinish]);
+
+  return (
+    <div className="w-full bg-[#1a2e18] rounded-xl p-4 md:p-6 shadow-inner border-t border-slate-800 min-h-[400px] relative flex flex-col justify-between overflow-hidden">
+      {/* Background patterned overlay (from design) */}
+      <div className="absolute inset-0 pointer-events-none">
+        <div className="h-full w-full flex flex-col justify-between py-2 opacity-20">
+          <div className="h-px bg-white w-full"></div>
+          <div className="h-px bg-white w-full"></div>
+          <div className="h-px bg-white w-full"></div>
+          <div className="h-px bg-white w-full"></div>
+          <div className="h-px bg-white w-full"></div>
+          <div className="h-px bg-white w-full"></div>
+        </div>
+        <div className="absolute left-32 top-0 bottom-0 w-1 bg-white/40"></div>
+        <div className="absolute right-12 top-0 bottom-0 w-8 flex flex-col justify-between items-center bg-white/10">
+          <div className="w-full h-full bg-[repeating-conic-gradient(#ffffff_0_90deg,#000000_0_180deg)] bg-[length:16px_16px] opacity-40"></div>
+        </div>
+      </div>
+      
+      {/* Startlinie */}
+      <div className="absolute top-0 bottom-0 left-[5%] w-1 bg-white/70 z-0 shadow-[0_0_10px_rgba(255,255,255,0.5)]" />
+      {/* Ziellinie */}
+      <div className="absolute top-0 bottom-0 left-[90%] w-3 border-r-4 border-l-4 border-dashed border-white/90 z-0 bg-red-500/30" />
+      
+      {liveHorses.map((h, i) => (
+        <div key={h.id} className="relative w-full h-14 md:h-16 flex items-center bg-black/10 rounded my-1">
+          {/* Bahn-Nummer & Pferdename im Hintergrund */}
+          <div className="absolute left-2 text-white/40 text-xs md:text-[10px] font-black uppercase text-slate-300 z-0 tracking-widest flex items-center gap-2">
+            <span className="opacity-40">#{i + 1}</span> <span>{h.name}</span>
+          </div>
+          
+          {/* Das animierte Pferd */}
+          <div
+            className="absolute z-10 transition-none"
+            style={{ 
+              left: `${5 + h.position}%`,
+              transform: 'translateX(-50%)' 
+            }}
+          >
+            <span className="text-3xl md:text-5xl drop-shadow-md">🐎</span>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// --- Main Application ---
+export default function App() {
+  const [horses, setHorses] = useState<Horse[]>(generateHorses());
+  const [players, setPlayers] = useState<Player[]>([]);
+  const [raceState, setRaceState] = useState<RaceState>('betting');
+  const [winner, setWinner] = useState<Horse | null>(null);
+
+  // Form State
+  const [newPlayerName, setNewPlayerName] = useState('');
+  const [newPlayerBet, setNewPlayerBet] = useState<number | ''>('');
+  const [selectedHorseId, setSelectedHorseId] = useState<string>('');
+
+  const handleAddPlayer = (e: FormEvent) => {
+    e.preventDefault();
+    if (!newPlayerName || !newPlayerBet || !selectedHorseId) return;
+
+    const horse = horses.find((h) => h.id === selectedHorseId);
+    if (!horse) return;
+
+    const newPlayer: Player = {
+      id: crypto.randomUUID(),
+      name: newPlayerName,
+      horse: horse,
+      bet: Number(newPlayerBet),
+    };
+
+    setPlayers([...players, newPlayer]);
+    setNewPlayerName('');
+    setNewPlayerBet('');
+    setSelectedHorseId('');
+  };
+
+  const startRace = () => {
+    setRaceState('racing');
+  };
+
+  const resetRace = () => {
+    setHorses(generateHorses());
+    setPlayers([]);
+    setRaceState('betting');
+    setWinner(null);
+  };
+
+  const handleRaceFinish = (winnerId: string) => {
+    const winningHorse = horses.find(h => h.id === winnerId);
+    if (winningHorse) {
+      setWinner(winningHorse);
+    }
+    setRaceState('finished');
+  };
+
+  return (
+    <div className="min-h-screen bg-[#0f172a] text-slate-200 font-sans flex flex-col">
+      <header className="h-16 bg-slate-800/80 border-b border-slate-700 flex items-center justify-between px-8 shrink-0 shadow-lg">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 bg-emerald-500 rounded flex items-center justify-center font-black text-slate-900 text-xl">D</div>
+          <h1 className="text-2xl font-bold tracking-tighter uppercase">Derby <span className="text-emerald-400">Dash</span></h1>
+        </div>
+        
+        {raceState === 'betting' ? (
+          <div className="flex gap-8 text-xs font-bold tracking-widest uppercase text-slate-400 hidden sm:flex">
+            <div className="flex flex-col items-end">
+              <span className="text-emerald-500">Status</span>
+              <span>Wetten geöffnet</span>
+            </div>
+            <div className="flex flex-col items-end">
+              <span>Rennen #402</span>
+              <span className="text-white">München-Riem</span>
+            </div>
+          </div>
+        ) : (
+          <button
+            onClick={resetRace}
+            className="flex items-center gap-2 bg-slate-700 hover:bg-slate-600 text-slate-200 px-4 py-2 rounded-lg font-medium transition-colors cursor-pointer text-xs uppercase tracking-widest"
+          >
+            <RotateCcw className="w-4 h-4" />
+            Neues Rennen
+          </button>
+        )}
+      </header>
+
+      <main className="flex-1 max-w-6xl mx-auto w-full p-4 md:p-6 space-y-6">
+
+        {/* --- PHASE 1: WETTBUCH / VORBEREITUNG --- */}
+        {raceState === 'betting' && (
+          <div className="flex flex-col lg:flex-row gap-6 animate-in fade-in zoom-in-95 duration-300">
+            
+            {/* Rechte Spalte: Formular & Start -> NOW LEFT (Geometric design style) */}
+            <section className="w-full lg:w-1/3 flex flex-col gap-6 order-2 lg:order-1">
+              <div className="bg-slate-800 border border-slate-700 rounded-xl p-6 shadow-xl">
+                <h2 className="text-sm font-black uppercase tracking-widest text-emerald-400 mb-6 flex items-center gap-2">
+                  <span className="w-2 h-4 bg-emerald-500"></span> Neue Wette
+                </h2>
+                
+                <form onSubmit={handleAddPlayer} className="space-y-4">
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] uppercase font-bold text-slate-500 tracking-wide">Spieler Name</label>
+                    <input
+                      type="text"
+                      required
+                      value={newPlayerName}
+                      onChange={(e) => setNewPlayerName(e.target.value)}
+                      className="w-full bg-slate-900/50 border border-slate-700 rounded-lg px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-emerald-500/50 text-white placeholder-slate-600"
+                      placeholder="z. B. Max Mustermann"
+                    />
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] uppercase font-bold text-slate-500 tracking-wide">Favorit Wählen</label>
+                    <select
+                      required
+                      value={selectedHorseId}
+                      onChange={(e) => setSelectedHorseId(e.target.value)}
+                      className="w-full bg-slate-900/50 border border-slate-700 rounded-lg px-4 py-3 text-sm outline-none appearance-none text-white focus:ring-2 focus:ring-emerald-500/50"
+                    >
+                      <option value="" disabled className="text-slate-500">Bitte wählen...</option>
+                      {horses.map(h => (
+                        <option key={h.id} value={h.id}>{h.name} ({h.odds.toFixed(2)}x)</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] uppercase font-bold text-slate-500 tracking-wide">Einsatz (€)</label>
+                    <input
+                      type="number"
+                      min="1"
+                      required
+                      value={newPlayerBet}
+                      onChange={(e) => setNewPlayerBet(Number(e.target.value))}
+                      className="w-full bg-slate-900/50 border border-slate-700 rounded-lg px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-emerald-500/50 text-white placeholder-slate-600"
+                      placeholder="0.00"
+                    />
+                  </div>
+
+                  <button
+                    type="submit"
+                    className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-black py-4 rounded-lg shadow-lg shadow-emerald-900/40 transition-all uppercase tracking-widest text-xs cursor-pointer"
+                  >
+                    Wette Platzieren
+                  </button>
+                </form>
+              </div>
+              
+              <div className="flex-1 bg-slate-800/30 border border-dashed border-slate-700 rounded-xl p-6 flex flex-col items-center justify-center text-center">
+                <p className="text-slate-500 text-sm italic">"Setzen Sie auf den richtigen Moment. Die Quoten ändern sich mit jedem Rennen."</p>
+              </div>
+            </section>
+
+            {/* Linke Spalte: Pferde & Quoten -> NOW RIGHT (Geometric design style) */}
+            <section className="flex-1 bg-slate-800 border border-slate-700 rounded-xl p-6 shadow-xl flex flex-col order-1 lg:order-2">
+              <h2 className="text-sm font-black uppercase tracking-widest text-emerald-400 mb-6 flex items-center justify-between">
+                <span>Aktuelle Platzierungen</span>
+                <span className="text-xs text-slate-500 normal-case font-medium">{players.length} Spieler registriert</span>
+              </h2>
+              
+              <div className="flex-1 overflow-hidden border border-slate-700 rounded-lg bg-slate-900/40">
+                <table className="w-full text-left border-collapse text-sm">
+                  <thead className="bg-slate-700/50 text-slate-400 uppercase text-[10px] tracking-widest">
+                    <tr className="border-b border-slate-700">
+                      <th className="px-6 py-4 font-bold">Spieler</th>
+                      <th className="px-6 py-4 font-bold">Pferd</th>
+                      <th className="px-6 py-4 font-bold">Einsatz</th>
+                      <th className="px-6 py-4 font-bold text-right">Mögl. Gewinn</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-700/50">
+                    {players.length === 0 ? (
+                      <tr>
+                        <td colSpan={4} className="px-6 py-8 text-center text-slate-500 italic">Noch keine Spieler eingetragen.</td>
+                      </tr>
+                    ) : (
+                      players.map((player) => (
+                        <tr key={player.id} className="hover:bg-slate-700/20">
+                          <td className="px-6 py-4 font-medium text-slate-200">{player.name}</td>
+                          <td className="px-6 py-4">
+                            <span className="px-2 py-1 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded text-xs">
+                              {player.horse.name}
+                            </span>
+                          </td>
+                          <td className="px-6 py-4 text-slate-300">{player.bet.toFixed(2)} €</td>
+                          <td className="px-6 py-4 text-right font-mono text-emerald-400">{(player.bet * player.horse.odds).toFixed(2)} €</td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="mt-6 flex flex-col sm:flex-row items-center justify-between gap-4">
+                <div className="flex gap-4 text-xs font-bold w-full sm:w-auto overflow-x-auto pb-2 sm:pb-0">
+                  <div className="bg-slate-900 border border-slate-700 px-4 py-2 rounded shrink-0">
+                    POT: <span className="text-emerald-400 ml-1">{players.reduce((sum, p) => sum + p.bet, 0).toFixed(2)} €</span>
+                  </div>
+                </div>
+                <button
+                  onClick={startRace}
+                  disabled={players.length === 0}
+                  className="w-full sm:w-auto px-10 py-4 bg-white text-slate-950 font-black rounded-lg hover:scale-105 active:scale-95 transition-all uppercase tracking-widest text-xs cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100"
+                >
+                  Rennen Starten 🏁
+                </button>
+              </div>
+            </section>
+            
+          </div>
+        )}
+
+        {/* --- PHASE 2: DAS RENNEN --- */}
+        {raceState === 'racing' && (
+          <div className="animate-in slide-in-from-bottom-8 duration-500 fade-in flex-1 flex flex-col">
+            <div className="bg-slate-800 border border-slate-700 rounded-xl p-4 md:p-8 text-center mb-6 shadow-xl">
+              <h2 className="text-2xl font-black uppercase text-emerald-400 tracking-widest animate-pulse">Das Rennen läuft!</h2>
+              <p className="text-slate-400 mt-2 text-sm">Die Pferde sind auf der Strecke...</p>
+            </div>
+            
+            <RaceTrack horses={horses} onFinish={handleRaceFinish} />
+          </div>
+        )}
+
+        {/* --- PHASE 3: AUSWERTUNG --- */}
+        {raceState === 'finished' && winner && (
+          <div className="space-y-8 animate-in zoom-in-95 fade-in duration-500">
+            {/* Sieger-Banner */}
+            <div className="bg-slate-800 border border-slate-700 rounded-2xl p-8 md:p-12 text-center shadow-xl relative overflow-hidden">
+              <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-emerald-900/40 via-slate-800 to-slate-800 pointer-events-none"></div>
+              <Trophy className="absolute -left-10 -bottom-10 w-64 h-64 text-emerald-500 opacity-5" />
+              <Trophy className="absolute -right-10 -top-10 w-64 h-64 text-emerald-500 opacity-5" />
+              
+              <div className="relative z-10 flex flex-col items-center">
+                <span className="text-6xl mb-4 drop-shadow-lg">🐎</span>
+                <span className="uppercase tracking-widest font-bold text-emerald-400 text-xs mb-2">Offizieller Gewinner</span>
+                <h2 className="text-5xl md:text-7xl font-black drop-shadow-md text-white uppercase tracking-tighter">
+                  {winner.name}
+                </h2>
+                <div className="mt-6 bg-slate-900 border border-emerald-500/30 px-6 py-2 rounded font-mono font-bold text-xl text-emerald-400 shadow-[0_0_15px_rgba(16,185,129,0.15)]">
+                  Quote: {winner.odds.toFixed(2)}x
+                </div>
+              </div>
+            </div>
+
+            {/* Auswertung der Wetten */}
+            <div className="bg-slate-800 rounded-xl shadow-xl border border-slate-700 overflow-hidden">
+              <div className="px-6 py-5 border-b border-slate-700 bg-slate-900/40">
+                <h3 className="text-sm font-black uppercase tracking-widest text-emerald-400">Rennergebnis & Ausschüttung</h3>
+              </div>
+              
+              <div className="p-0">
+                {players.length === 0 ? (
+                  <p className="text-slate-500 italic text-center p-8">Niemand hat gewettet. Besser beim nächsten Mal!</p>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left border-collapse text-sm">
+                      <thead className="bg-slate-700/30 text-slate-400 uppercase text-[10px] tracking-widest">
+                        <tr className="border-b border-slate-700">
+                          <th className="px-6 py-4 font-bold">Spieler</th>
+                          <th className="px-6 py-4 font-bold">Tipp</th>
+                          <th className="px-6 py-4 font-bold">Einsatz</th>
+                          <th className="px-6 py-4 font-bold text-right">Resultat</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-700/50">
+                        {players.map(player => {
+                          const didWin = player.horse.id === winner.id;
+                          const payout = didWin ? (player.bet * player.horse.odds) : 0;
+                          
+                          return (
+                            <tr key={player.id} className="hover:bg-slate-700/20">
+                              <td className="px-6 py-4 font-medium text-slate-200">{player.name}</td>
+                              <td className="px-6 py-4">
+                                <span className="px-2 py-1 bg-slate-900 border border-slate-700 text-slate-300 rounded text-xs flex items-center w-max gap-1">
+                                  🐎 {player.horse.name}
+                                </span>
+                              </td>
+                              <td className="px-6 py-4 font-mono text-slate-400">{player.bet.toFixed(2)} €</td>
+                              <td className="px-6 py-4 text-right">
+                                {didWin ? (
+                                  <div className="inline-flex items-center gap-2 text-emerald-400 font-mono font-bold bg-emerald-500/10 px-3 py-1.5 rounded border border-emerald-500/20">
+                                    <Trophy className="w-3 h-3" />
+                                    +{payout.toFixed(2)} €
+                                  </div>
+                                ) : (
+                                  <div className="inline-flex items-center text-slate-500 font-mono text-xs bg-slate-900 border border-slate-700 px-3 py-1.5 rounded">
+                                    - {player.bet.toFixed(2)} €
+                                  </div>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            </div>
+            
+          </div>
+        )}
+
+      </main>
+    </div>
+  );
+}
